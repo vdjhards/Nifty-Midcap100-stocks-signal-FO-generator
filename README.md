@@ -128,8 +128,14 @@ Go to your repo → **Settings → Secrets and variables → Actions** → add:
 ### D. Add the workflow
 The repository includes `inside_bar_scanner.yml` at `.github/workflows/inside_bar_scanner.yml`.
 If you are adding it to another repository, place the workflow there at the same path.
-in your repo. It runs automatically every 15 minutes from 10:30 AM to
-2:30 PM IST, **Monday–Friday only** — it will not run on weekends.
+The workflow starts one long-running watcher at about 10:20 AM IST,
+Monday–Friday. The watcher runs the scanner at each 15-minute boundary from
+10:31 AM through 2:31 PM IST. Fallback schedules start the watcher later if
+GitHub delays or drops the first scheduled event.
+
+The watcher is used because GitHub Actions cron events are best-effort and
+frequent 15-minute cron jobs can be skipped. The workflow's `timeout-minutes`
+setting allows the watcher to remain active for the trading session.
 
 ### E. Test it manually first
 Before relying on the schedule, trigger it manually: go to the **Actions**
@@ -161,8 +167,10 @@ so check older signals soon after the trading day.
 - **No backtested win rate** — the pattern and scoring are rule-based, not
   statistically validated yet.
 - **Duplicate-alert protection** relies on a cached state file across
-  GitHub Actions runs in the same day; if you notice a stock alerted twice
-  in one day, that's the first place to check.
-- **Universe refresh** uses the official Nifty Indices constituent CSV at
-   9:10 AM IST on weekdays and caches the 100 symbols for the day. If the
-   refresh fails, the scanner can use an existing cached universe.
+   scanner passes during the same watcher session. A fallback watcher queued
+   after a completed session starts with a fresh state file.
+- **Universe refresh** uses the official Nifty Indices constituent CSV when
+   the watcher starts and keeps the refreshed 100-symbol list for that session.
+   If the refresh fails, the scanner can use the checked-in universe file.
+- **Secrets** should be stored in GitHub Actions secrets. Never commit `.env`
+   or expose a Telegram bot token; revoke any token that has been exposed.

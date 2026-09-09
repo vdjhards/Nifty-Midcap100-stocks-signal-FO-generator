@@ -2,13 +2,11 @@ name: 15-Min Inside-Bar Scanner
 
 on:
   schedule:
-    # Refresh the Nifty Midcap 100 universe at 09:10 IST (03:40 UTC), Mon-Fri.
-    - cron: "40 3 * * 1-5"
-    # Runs every 15 min from 10:31 to 14:16 IST, Mon-Fri.
-    # GitHub Actions cron is in UTC. IST = UTC+5:30, so 10:31-14:16 IST = 05:01-08:46 UTC.
-    - cron: "1,16,31,46 5-8 * * 1-5"
-    # Final scan at 14:31 IST (09:01 UTC), Mon-Fri.
-    - cron: "1 9 * * 1-5"
+    # Start one long-lived watcher at 10:20 IST (04:50 UTC), Mon-Fri.
+    - cron: "50 4 * * 1-5"
+    # Fallback starts if the first scheduled event is dropped.
+    - cron: "35 5 * * 1-5"
+    - cron: "35 6 * * 1-5"
   workflow_dispatch: {}  # allows manual trigger for testing
 
 permissions:
@@ -19,43 +17,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  refresh-universe:
-    if: github.event_name == 'schedule' && github.event.schedule == '40 3 * * 1-5'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: python -m pip install yfinance requests python-dotenv
-
-      - name: Restore latest Nifty Midcap 100 universe
-        uses: actions/cache@v5
-        with:
-          path: nifty_midcap100_symbols.json
-          key: nifty-midcap100-universe-${{ github.run_id }}
-          restore-keys: |
-            nifty-midcap100-universe-
-
-      - name: Refresh Nifty Midcap 100 universe
-        run: python scanner.py --refresh-universe
-
-      - name: Save refreshed Nifty Midcap 100 universe
-        uses: actions/cache/save@v5
-        with:
-          path: nifty_midcap100_symbols.json
-          key: nifty-midcap100-universe-${{ github.run_id }}
-
   scan:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '40 3 * * 1-5'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -68,31 +32,8 @@ jobs:
       - name: Install dependencies
         run: python -m pip install yfinance requests python-dotenv
 
-      - name: Restore today's alert state
-        uses: actions/cache@v5
-        with:
-          path: alerted_today.json
-          key: alerted-state-${{ github.run_id }}
-          restore-keys: |
-            alerted-state-
-
-      - name: Restore latest Nifty Midcap 100 universe
-        uses: actions/cache@v5
-        with:
-          path: nifty_midcap100_symbols.json
-          key: nifty-midcap100-universe-${{ github.run_id }}
-          restore-keys: |
-            nifty-midcap100-universe-
-
-      - name: Run scanner
+      - name: Watch the trading session
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scanner.py
-
-      - name: Save today's alert state
-        uses: actions/cache/save@v5
-        if: always()
-        with:
-          path: alerted_today.json
-          key: alerted-state-${{ github.run_id }}
+        run: python watch.py
