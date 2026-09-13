@@ -106,8 +106,9 @@ def load_state():
         with open(STATE_FILE) as f:
             data = json.load(f)
         if data.get("date") == today:
+            data.setdefault("signals", [])
             return data
-    return {"date": today, "alerted": []}
+    return {"date": today, "alerted": [], "signals": []}
 
 
 def save_state(state):
@@ -357,13 +358,27 @@ def run():
             candle1, coil, breakout_candle, direction, df
         )
         msg = build_message(symbol, direction, candle1, coil, breakout_candle, score, checklist, sl_distance_pct)
-        signals.append((score, symbol, msg))
+        entry = float(breakout_candle["Close"])
+        target = entry * (1 + TARGET_PCT) if direction == "BUY" else entry * (1 - TARGET_PCT)
+        stop = float(candle1["Low"] if direction == "BUY" else candle1["High"])
+        signal_record = {
+            "symbol": symbol,
+            "date": state["date"],
+            "direction": direction,
+            "breakout_time": breakout_candle.name.strftime("%H:%M"),
+            "entry": entry,
+            "target": target,
+            "stop": stop,
+            "score": score,
+        }
+        signals.append((score, symbol, msg, signal_record))
 
     # Rank by confidence, highest first, and send
     signals.sort(key=lambda x: x[0], reverse=True)
-    for score, symbol, msg in signals:
+    for score, symbol, msg, signal_record in signals:
         if send_telegram(msg):
             state["alerted"].append(symbol)
+            state["signals"].append(signal_record)
 
     if not signals:
         print(f"No new signals this run ({datetime.datetime.now(IST).strftime('%H:%M')}).")

@@ -128,14 +128,19 @@ Go to your repo → **Settings → Secrets and variables → Actions** → add:
 ### D. Add the workflow
 The repository includes `inside_bar_scanner.yml` at `.github/workflows/inside_bar_scanner.yml`.
 If you are adding it to another repository, place the workflow there at the same path.
-The workflow starts one long-running watcher at about 10:20 AM IST,
+The workflow starts one long-running watcher at about 10:31 AM IST,
 Monday–Friday. The watcher runs the scanner at each 15-minute boundary from
-10:31 AM through 2:31 PM IST. Fallback schedules start the watcher later if
-GitHub delays or drops the first scheduled event.
+10:46 AM through 2:31 PM IST. Fallback schedules start the watcher at 10:46
+AM and 11:01 AM IST if GitHub delays or drops the first scheduled event.
 
 The watcher is used because GitHub Actions cron events are best-effort and
 frequent 15-minute cron jobs can be skipped. The workflow's `timeout-minutes`
-setting allows the watcher to remain active for the trading session.
+setting allows the watcher to remain active for the trading session. A separate
+weekday report runs around 6:00 PM IST and checks the day's alerted symbols
+with `check_signal.py` before sending their outcomes to Telegram. The scanner
+saves each sent signal's original date, direction, breakout time, and trade
+levels, so the report does not need to rediscover the signal from changed
+Yahoo Finance candles.
 
 ### E. Test it manually first
 Before relying on the schedule, trigger it manually: go to the **Actions**
@@ -156,6 +161,10 @@ candle, it reports the result as ambiguous because candle data cannot show
 which level was reached first. Yahoo Finance generally limits intraday history,
 so check older signals soon after the trading day.
 
+The workflow also sends an automated report around 6:00 PM IST on weekdays.
+It checks every symbol that generated a signal that day and sends the breakout,
+entry, target, stop-loss, and outcome to Telegram.
+
 ---
 
 ## 4. Known Limitations
@@ -166,9 +175,9 @@ so check older signals soon after the trading day.
   tighter live accuracy later.
 - **No backtested win rate** — the pattern and scoring are rule-based, not
   statistically validated yet.
-- **Duplicate-alert protection** relies on a cached state file across
-   scanner passes during the same watcher session. A fallback watcher queued
-   after a completed session starts with a fresh state file.
+- **Duplicate-alert protection** relies on a cached state file across scanner
+   passes and fallback watcher starts during the same trading day. The report
+   checks the state date before using it, so older cached signals are ignored.
 - **Universe refresh** uses the official Nifty Indices constituent CSV when
    the watcher starts and keeps the refreshed 100-symbol list for that session.
    If the refresh fails, the scanner can use the checked-in universe file.

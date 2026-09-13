@@ -2,9 +2,13 @@
 
 import argparse
 import datetime
+import json
+import os
 import zoneinfo
 
+import requests
 import yfinance as yf
+from dotenv import load_dotenv
 
 
 IST = zoneinfo.ZoneInfo("Asia/Kolkata")
@@ -12,18 +16,36 @@ SETUP_START = datetime.time(9, 15)
 COIL_END = datetime.time(10, 30)
 CUTOFF = datetime.time(14, 30)
 TARGET_PCT = 0.01
+STATE_FILE = "alerted_today.json"
+
+load_dotenv()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Check a 15-minute inside-bar signal after the trading day."
     )
-    parser.add_argument("symbol", help="NSE symbol, for example EICHERMOT")
+    parser.add_argument("symbol", nargs="?", help="NSE symbol, for example EICHERMOT")
     parser.add_argument(
         "date",
+        nargs="?",
         help="Signal date in YYYY-MM-DD format, for example 2026-08-26",
     )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Check every signal recorded in alerted_today.json and send a Telegram report",
+    )
     return parser.parse_args()
+
+
+def parse_date(value):
+    try:
+        return datetime.date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise SystemExit("Date must use YYYY-MM-DD format")
 
 
 def fetch_day(symbol, trade_date):
@@ -72,6 +94,10 @@ def check_outcome(direction, breakout_time, breakout, candle1, df):
     entry = float(breakout["Close"])
     target = entry * (1 + TARGET_PCT) if direction == "BUY" else entry * (1 - TARGET_PCT)
     stop = float(candle1["Low"] if direction == "BUY" else candle1["High"])
+    return check_outcome_levels(direction, breakout_time, entry, target, stop, df)
+
+
+def check_outcome_levels(direction, breakout_time, entry, target, stop, df):
     after_entry = df[df.index > breakout_time]
 
     for timestamp, candle in after_entry.iterrows():
@@ -87,33 +113,124 @@ def check_outcome(direction, breakout_time, breakout, candle1, df):
     return "OPEN AT DAY CLOSE", None, entry, target, stop
 
 
-def main():
-    args = parse_args()
-    try:
-        trade_date = datetime.date.fromisoformat(args.date)
-    except ValueError:
-        raise SystemExit("Date must use YYYY-MM-DD format")
-
-    df = fetch_day(args.symbol, trade_date)
+def check_symbol(symbol, trade_date):
+    df = fetch_day(symbol, trade_date)
     if df is None:
-        raise SystemExit(f"No 15-minute data found for {args.symbol.upper()} on {args.date}")
+        return f"{symbol.upper()} | Date {trade_date} | No 15-minute data found"
 
     signal = find_signal(df)
     if signal is None:
-        raise SystemExit("No valid inside-bar breakout found for that symbol and date")
+        return f"{symbol.upper()} | Date {trade_date} | No valid inside-bar breakout found"
 
     direction, breakout_time, breakout, candle1, _ = signal
     outcome, outcome_time, entry, target, stop = check_outcome(
         direction, breakout_time, breakout, candle1, df
     )
+    result_time = "" if outcome_time is None else f" at {outcome_time.strftime('%H:%M')} IST"
+    return (
+        f"{symbol.upper()} | Date {trade_date} | {direction} | "
+        f"Breakout {breakout_time.strftime('%H:%M')} IST | "
+        f"Entry ₹{entry:.2f} | Target ₹{target:.2f} | Stop ₹{stop:.2f} | "
+        f"{outcome}{result_time}"
+    )
 
-    print(f"{args.symbol.upper()} | {trade_date} | {direction}")
-    print(f"Breakout: {breakout_time.strftime('%H:%M')} IST")
-    print(f"Entry: ₹{entry:.2f} | Target: ₹{target:.2f} | Stop-loss: ₹{stop:.2f}")
-    if outcome_time is None:
-        print(f"Result: {outcome}")
+
+def check_stored_signal(signal, trade_date):
+    symbol = signal["symbol"].upper()
+    df = fetch_day(symbol, trade_date)
+    if df is None:
+        return f"{symbol} | Date {trade_date} | No 15-minute data found"
+
+    breakout_time = datetime.datetime.combine(
+        trade_date,
+        datetime.time.fromisoformat(signal["breakout_time"]),
+        tzinfo=IST,
+    )
+    outcome, outcome_time, entry, target, stop = check_outcome_levels(
+        signal["direction"],
+        breakout_time,
+        float(signal["entry"]),
+        float(signal["target"]),
+        float(signal["stop"]),
+        df,
+    )
+    result_time = "" if outcome_time is None else f" at {outcome_time.strftime('%H:%M')} IST"
+    return (
+        f"{symbol} | Date {trade_date} | {signal['direction']} | "
+        f"Breakout {signal['breakout_time']} IST | "
+        f"Entry ₹{entry:.2f} | Target ₹{target:.2f} | Stop ₹{stop:.2f} | "
+        f"{outcome}{result_time}"
+    )
+
+
+def send_telegram(text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured")
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    lines = text.splitlines()
+    chunks = []
+    current = []
+    current_length = 0
+    for line in lines:
+        line_length = len(line) + (1 if current else 0)
+        if current and current_length + line_length > 3900:
+            chunks.append("\n".join(current))
+            current = []
+            current_length = 0
+        current.append(line)
+        current_length += len(line) + (1 if len(current) > 1 else 0)
+    if current:
+        chunks.append("\n".join(current))
+
+    for chunk in chunks:
+        response = requests.post(
+            url,
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": chunk},
+            timeout=20,
+        )
+        response.raise_for_status()
+
+
+def run_report(trade_date):
+    if not os.path.exists(STATE_FILE):
+        raise SystemExit(f"{STATE_FILE} was not found")
+
+    with open(STATE_FILE) as state_file:
+        state = json.load(state_file)
+    records = state.get("signals", [])
+    symbols = state.get("alerted", [])
+    if state.get("date") != trade_date.isoformat():
+        records = []
+        symbols = []
+
+    lines = [
+        f"15-MIN SIGNAL REPORT | {trade_date.strftime('%d-%b-%Y')} | 06:00 PM IST",
+        "",
+    ]
+    if records:
+        lines.extend(check_stored_signal(record, trade_date) for record in records)
+    elif symbols:
+        lines.extend(check_symbol(symbol, trade_date) for symbol in symbols)
     else:
-        print(f"Result: {outcome} at {outcome_time.strftime('%H:%M')} IST")
+        lines.append("No signals were generated today.")
+
+    send_telegram("\n".join(lines))
+    print(f"Sent Telegram report for {len(records) or len(symbols)} signal(s).")
+
+
+def main():
+    args = parse_args()
+    if args.report:
+        trade_date = parse_date(args.date or datetime.datetime.now(IST).date().isoformat())
+        run_report(trade_date)
+        return
+
+    if not args.symbol or not args.date:
+        raise SystemExit("Provide SYMBOL DATE, or use --report")
+    trade_date = parse_date(args.date)
+
+    print(check_symbol(args.symbol, trade_date))
 
 
 if __name__ == "__main__":
