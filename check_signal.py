@@ -165,7 +165,8 @@ def check_stored_signal(signal, trade_date):
 
 def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured")
+        print("[WARN] Telegram credentials not configured; skipping report send.")
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     lines = text.splitlines()
@@ -184,22 +185,33 @@ def send_telegram(text):
         chunks.append("\n".join(current))
 
     for chunk in chunks:
-        response = requests.post(
-            url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "text": chunk},
-            timeout=20,
-        )
-        response.raise_for_status()
+        try:
+            response = requests.post(
+                url,
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": chunk},
+                timeout=20,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            print(f"[ERROR] Telegram send failed: {exc}")
+            return False
+    return True
 
 
 def run_report(trade_date):
     if not os.path.exists(STATE_FILE):
-        raise SystemExit(f"{STATE_FILE} was not found")
+        print(f"[WARN] {STATE_FILE} was not found; skipping report for {trade_date.isoformat()}.")
+        return
 
-    with open(STATE_FILE) as state_file:
-        state = json.load(state_file)
-    records = state.get("signals", [])
-    symbols = state.get("alerted", [])
+    try:
+        with open(STATE_FILE) as state_file:
+            state = json.load(state_file)
+    except (OSError, ValueError) as exc:
+        print(f"[WARN] Could not read {STATE_FILE}: {exc}; skipping report.")
+        return
+
+    records = state.get("signals") or []
+    symbols = state.get("alerted") or []
     if state.get("date") != trade_date.isoformat():
         records = []
         symbols = []
@@ -215,8 +227,10 @@ def run_report(trade_date):
     else:
         lines.append("No signals were generated today.")
 
-    send_telegram("\n".join(lines))
-    print(f"Sent Telegram report for {len(records) or len(symbols)} signal(s).")
+    if send_telegram("\n".join(lines)):
+        print(f"Sent Telegram report for {len(records) or len(symbols)} signal(s).")
+    else:
+        print("Telegram report skipped because sending failed or credentials were missing.")
 
 
 def main():

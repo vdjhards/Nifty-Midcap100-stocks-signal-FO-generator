@@ -7,8 +7,8 @@ on:
     # Fallback starts if the first scheduled event is dropped.
     - cron: "16 5 * * 1-5"
     - cron: "31 5 * * 1-5"
-    # Send the day's signal outcome report at 18:00 IST (12:30 UTC), Mon-Fri.
-    - cron: "30 12 * * 1-5"
+    # Send the day's signal outcome report at 16:00 IST (10:30 UTC), Mon-Fri.
+    - cron: "30 10 * * 1-5"
   workflow_dispatch: {}  # allows manual trigger for testing
 
 permissions:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   scan:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '30 12 * * 1-5'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '30 10 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -57,7 +57,7 @@ jobs:
           key: alerted-state-${{ github.ref_name }}-${{ github.run_id }}
 
   report:
-    if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 1-5'
+    if: github.event_name == 'schedule' && github.event.schedule == '30 10 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -136,11 +136,13 @@ AM and 11:01 AM IST if GitHub delays or drops the first scheduled event.
 The watcher is used because GitHub Actions cron events are best-effort and
 frequent 15-minute cron jobs can be skipped. The workflow's `timeout-minutes`
 setting allows the watcher to remain active for the trading session. A separate
-weekday report runs around 6:00 PM IST and checks the day's alerted symbols
+weekday report runs around 4:00 PM IST and checks the day's alerted symbols
 with `check_signal.py` before sending their outcomes to Telegram. The scanner
 saves each sent signal's original date, direction, breakout time, and trade
 levels, so the report does not need to rediscover the signal from changed
-Yahoo Finance candles.
+Yahoo Finance candles. If there are no signals for the day or the Telegram
+credentials are unavailable, the script now logs a warning and exits cleanly
+instead of failing the GitHub Action.
 
 ### E. Test it manually first
 Before relying on the schedule, trigger it manually: go to the **Actions**
@@ -161,7 +163,7 @@ candle, it reports the result as ambiguous because candle data cannot show
 which level was reached first. Yahoo Finance generally limits intraday history,
 so check older signals soon after the trading day.
 
-The workflow also sends an automated report around 6:00 PM IST on weekdays.
+The workflow also sends an automated report around 4:00 PM IST on weekdays.
 It checks every symbol that generated a signal that day and sends the breakout,
 entry, target, stop-loss, and outcome to Telegram.
 
