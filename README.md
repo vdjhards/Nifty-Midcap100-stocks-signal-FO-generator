@@ -24,12 +24,17 @@ after 10:30 AM, the direction of the break is taken as the trade direction.
    skipped for the day — the setup didn't form as intended.
 
 3. **Breakout check (10:30 AM onward)** — starting at 10:30 and re-checked
-   every 15 minutes up to a cutoff (1:00 PM), the scanner watches for a
+   every 15 minutes up to a cutoff (2:30 PM), the scanner watches for a
    candle that **closes** beyond Candle 1's high or low:
    - Close **above** Candle 1's high → **BUY** signal
    - Close **below** Candle 1's low → **SELL** signal
    - A wick poking beyond the range that closes back inside does **not**
      count — only a confirmed close triggers a signal.
+
+   The scanner ignores the currently forming 15-minute candle. Because each
+   run happens shortly after a candle boundary, the latest candle is usually
+   checked on the next run after its 15-minute close is available. No fresh
+   breakout is accepted after 2:30 PM IST.
 
 4. **Trade levels:**
    - **Entry** = the breakout candle's close price
@@ -130,18 +135,61 @@ The repository includes `inside_bar_scanner.yml` at `.github/workflows/inside_ba
 If you are adding it to another repository, place the workflow there at the same path.
 The workflow starts one long-running watcher at about 10:31 AM IST,
 Monday–Friday. The watcher runs the scanner at each 15-minute boundary from
-10:46 AM through 2:31 PM IST. Fallback schedules start the watcher at 10:46
-AM and 11:01 AM IST if GitHub delays or drops the first scheduled event.
+10:46 AM through 2:31 PM IST. The watcher schedules runs at minutes `:01`,
+`:16`, `:31`, and `:46`, starts scanning after 10:30, and stops around 2:40 PM.
+The fresh-breakout cutoff is 2:30 PM, so a final confirmed candle can be
+evaluated on the next watcher pass.
 
 The watcher is used because GitHub Actions cron events are best-effort and
-frequent 15-minute cron jobs can be skipped. The workflow's `timeout-minutes`
-setting allows the watcher to remain active for the trading session. A separate
-weekday report runs around 4:00 PM IST and checks the day's alerted symbols
-with `check_signal.py` before sending their outcomes to Telegram. The scanner
-saves each sent signal's original date, direction, breakout time, and trade
-levels, so the report does not need to rediscover the signal from changed
+frequent 15-minute cron jobs can be skipped. If the 10:31 AM start event is
+missed, use **Actions → 15-Min Inside-Bar Scanner → Run workflow**. A manual
+run starts the same long-lived watcher and can remain active for most of the
+trading session; it is not a single point-in-time scan. The scan and report
+jobs have separate concurrency groups, so the 4:00 PM IST report can run
+independently of the watcher.
+
+A separate weekday report runs around 4:00 PM IST and checks the day's alerted
+symbols with `check_signal.py` before sending their outcomes to Telegram. The
+scanner saves each sent signal's original date, direction, breakout time, and
+trade levels, so the report does not need to rediscover the signal from changed
 Yahoo Finance candles. If there are no signals for the day or Telegram delivery
 fails, the report logs a warning and exits cleanly instead of failing the job.
+
+The watcher refreshes the Nifty Midcap 100 universe at startup. It downloads the
+official constituent CSV, validates that it contains exactly 100 unique symbols,
+and saves them to `nifty_midcap100_symbols.json` for the session. If the refresh
+cannot be completed, the checked-in universe file is used when it is valid.
+
+### Local installation and commands
+
+The GitHub workflow uses Python 3.11 and these packages:
+
+```powershell
+python -m pip install yfinance requests python-dotenv
+```
+
+Useful commands from the repository root:
+
+```powershell
+# Run the full trading-session watcher; refreshes the universe at startup.
+python watch.py
+
+# Run one scanner pass using the cached universe.
+python scanner.py
+
+# Refresh and save the latest 100-symbol universe, then exit.
+python scanner.py --refresh-universe
+
+# Check one symbol/date after market close.
+python check_signal.py EICHERMOT 2026-08-26
+
+# Check all signals stored for today and send the report when Telegram is configured.
+python check_signal.py --report
+```
+
+Without `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, `scanner.py` prints each
+signal locally instead of sending it. The report command skips Telegram delivery
+and logs a warning when those credentials are missing.
 
 ### E. Test it manually first
 Before relying on the schedule, trigger it manually: go to the **Actions**
@@ -165,6 +213,34 @@ so check older signals soon after the trading day.
 The workflow also sends an automated report around 4:00 PM IST on weekdays.
 It checks every symbol that generated a signal that day and sends the breakout,
 entry, target, stop-loss, and outcome to Telegram.
+
+### Alert state
+
+`alerted_today.json` is date-scoped and prevents duplicate alerts during
+repeated scanner passes. Its shape is:
+
+```json
+{
+   "date": "2026-08-26",
+   "alerted": ["EICHERMOT"],
+   "signals": [
+      {
+         "symbol": "EICHERMOT",
+         "date": "2026-08-26",
+         "direction": "BUY",
+         "breakout_time": "10:45",
+         "entry": 1000.0,
+         "target": 1010.0,
+         "stop": 980.0,
+         "score": 85
+      }
+   ]
+}
+```
+
+The report uses the stored entry, target, stop, direction, and breakout time
+instead of trying to rediscover the original signal. A new date creates fresh
+state automatically.
 
 ---
 

@@ -2,11 +2,14 @@ name: 15-Min Inside-Bar Scanner
 
 on:
   schedule:
-    # Start one long-lived watcher at 10:31 IST (05:01 UTC), Mon-Fri.
+    # Exactly one event to start the watcher, at 10:31 IST (05:01 UTC), Mon-Fri.
+    #
+    # Previously this had two extra fallback crons "in case the first is dropped."
+    # They don't help: with concurrency, only one run can be active at a time, so a
+    # fallback just queues behind the live watcher for the whole ~4h session and then
+    # fires uselessly after close. If this single event is ever dropped by GitHub,
+    # start it by hand: Actions -> 15-Min Inside-Bar Scanner -> Run workflow.
     - cron: "1 5 * * 1-5"
-    # Fallback starts if the first scheduled event is dropped.
-    - cron: "16 5 * * 1-5"
-    - cron: "31 5 * * 1-5"
     # Send the day's signal outcome report at 16:00 IST (10:30 UTC), Mon-Fri.
     - cron: "30 10 * * 1-5"
   workflow_dispatch: {}  # allows manual trigger for testing
@@ -14,15 +17,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: inside-bar-scanner-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   scan:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule != '30 10 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    concurrency:
+      group: inside-bar-scanner-watch-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -60,6 +62,9 @@ jobs:
     if: github.event_name == 'schedule' && github.event.schedule == '30 10 * * 1-5'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: inside-bar-scanner-report-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5

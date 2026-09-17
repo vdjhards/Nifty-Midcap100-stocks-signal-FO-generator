@@ -158,10 +158,22 @@ def check_breakout(candle1, breakout_candidates, cutoff_time):
     Look through breakout candidate candles (10:30 onward) for the FIRST
     candle whose CLOSE breaks beyond candle1's high or low.
     Returns (direction, breakout_candle) or (None, None).
+
+    A 15m candle is still forming until 15 minutes after its timestamp. Since
+    this runs ~1 minute after each boundary, the most recent candle in
+    breakout_candidates is usually still open — its "Close" is just the latest
+    traded price, not a real close. Evaluating it here would let a 1-minute
+    price wiggle masquerade as a "confirmed close" breakout. Skip any candle
+    that hasn't actually finished yet; it will be checked again next run once
+    it's closed.
     """
+    now_ist = datetime.datetime.now(IST).replace(tzinfo=None)
     for ts, c in breakout_candidates.iterrows():
         if ts.time() > cutoff_time:
             break
+        candle_close_time = ts.replace(tzinfo=None) + datetime.timedelta(minutes=15)
+        if now_ist < candle_close_time:
+            break  # this candle (and any after it) hasn't closed yet
         if c["Close"] > candle1["High"]:
             return "BUY", c
         if c["Close"] < candle1["Low"]:
